@@ -1,186 +1,419 @@
-@Echo off
-@Setlocal enabledelayedexpansion
+@echo off
+if "%~1" == "startGame" goto :game
+if "%~1" == "startController" goto :controller
 
 
-::------------- Game ----------------::
-call :WelcomeScreen
-call :initGame
-call :Play
-::-----------------------------------::
+::------------------------------------------------------------
+:: verify existence of CHOICE command
+:: set up a macro appropriately depending on available version
+
+set "choice="
+2>nul >nul choice /c:yn /t 0 /d y
+if errorlevel 1 if not errorlevel 2 set "choice=choice /cs"
+if not defined choice (
+  2>nul >nul choice /c:yn /t:y,1
+  if errorlevel 1 if not errorlevel 2 set "choice=choice /s"
+)
+if not defined choice (
+  echo ERROR: This game requires the CHOICE command, but it is missing.
+  echo Game aborted. :(
+  echo(
+  echo A 16 bit port of CHOICE.EXE from FREEDOS is available at
+  echo http://winsupport.org/utilities/freedos-choice.html
+  echo(
+  echo A 32 bit version from ??? suitable for 64 bit machines is available at
+  echo http://hp.vector.co.jp/authors/VA007219/dkclonesup/choice.html
+  echo(
+  exit /b
+)
 
 
-::------------- Funcs ---------------::
-:WelcomeScreen
-    @Mode 78,15
-    @Title Tic Tac Toe Game 1.0 ^| Psi505 ^(c^) 2020
-    color 1e
-    :: Hide the cursor
-    Batbox /h 0
+::---------------------------------------------------------------------
+:: setup some global variables used by both the game and the controller
 
-    echo.
-    echo  :=------------------------------------------------------------------------=:
-    echo.
-    echo        ______  _             ______                    ______             
-    echo       /_  __/ ^(_^) _____     /_  __/ ____ _  _____     /_  __/ ____   ___ 
-    echo        / /   / / / ___/      / /   / __ `/ / ___/      / /   / __ \ / _ \
-    echo       / /   / / / /__       / /   / /_/ / / /__       / /   / /_/ //  __/
-    echo      /_/   /_/  \___/      /_/    \__,_/  \___/      /_/    \____/ \___/
-    echo.
-    echo.
-    echo.
-    echo                              Author : Psi505
-    echo.
-    echo  :=------------------------------------------------------------------------=:
-Timeout /t 4 >nul
+set "keys=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+set "keyFile=key.txt"
+set "cmdFile=cmd.txt"
 
 
-:initGame
-    @Mode 35,14
-    @Title Tic Tac Toe Game
-    cls
-    color 07
-    
-    :: Define the grid
-    set upperSide=/g 11 2 /a 218 /a 196 /a 196 /a 196 /a 194 /a 196 /a 196 /a 196 /a 194 /a 196 /a 196 /a 196 /a 191
-    set lowerSide=/g 11 8 /a 192 /a 196 /a 196 /a 196 /a 193 /a 196 /a 196 /a 196 /a 193 /a 196 /a 196 /a 196 /a 217
-    set seperator1=/g 11 4 /a 195 /a 196 /a 196 /a 196 /a 197 /a 196 /a 196 /a 196 /a 197 /a 196 /a 196 /a 196 /a 180
-    set seperator2=/g 11 6 /a 195 /a 196 /a 196 /a 196 /a 197 /a 196 /a 196 /a 196 /a 197 /a 196 /a 196 /a 196 /a 180
-    set middle1=/g 11 3 /a 179 /g 15 3 /a 179 /g 19 3 /a 179 /g 23 3 /a 179
-    set middle2=/g 11 5 /a 179 /g 15 5 /a 179 /g 19 5 /a 179 /g 23 5 /a 179
-    set middle3= /g 11 7 /a 179 /g 15 7 /a 179 /g 19 7 /a 179 /g 23 7 /a 179
+::------------------------------------------
+:: launch the game and the controller
 
-    :: Draw the whole grid
-    batbox %upperSide% %middle1% %seperator1% %middle2% %seperator2% %middle3% %lowerSide%
-    
-    :: Set box positions to display player input
-    set Positions=13.3 17.3 21.3 13.5 17.5 21.5 13.7 17.7 21.7
-    for %%p in (%Positions%) do (
-        set %%p=%%p
-        set x=!%%p:~0,2!
-        set y=!%%p:~3,1!
-        set "%%p= "
-        batbox /g !x! !y! /d !%%p!
+copy nul "%keyFile%" >nul
+start "" /b "%~f0" startController 9^>^>%keyFile% 2^>nul ^>nul
+cmd /c "%~f0" startGame 9^<%keyFile% ^<nul
+echo(
+
+::--------------------------------------------------------------------------------
+:: Upon exit, wait for the controller to close before deleting the temp input file
+
+:close
+2>nul (>>"%keyFile%" call )||goto :close
+del "%keyFile%"
+exit /b
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:game
+setlocal disableDelayedExpansion
+title %~nx0
+cls
+
+::----------------------------
+:: user configurable options
+
+set "up=W"
+set "down=S"
+set "left=A"
+set "right=D"
+
+set "width=40"   max=99
+set "height=25"  max=99
+:: max playing field: (width-2)*(height-2) <= 1365
+
+::----------------------------
+:: resize the console window
+
+set /a cols=width+1, lines=height+10, area=(width-2)*(height-2)
+if %area% gtr 1365 (
+  echo ERROR: Playfield area too large
+  >"%cmdFile%" (echo quit)
+  exit
+)
+if %lines% lss 14 set lines=14
+if %cols% lss 46 set cols=46
+mode con: cols=%cols% lines=%lines%
+
+::----------------------------
+:: define variables
+
+set "spinner1=-"
+set "spinner2=\"
+set "spinner3=|"
+set "spinner4=/"
+set "spinner= spinner1 spinner2 spinner3 spinner4 "
+
+set "space= "
+set "bound=#"
+set "food=+"
+set "head=@"
+set "body=O"
+set "death=X"
+set "playerSpace=%space%%food%"
+
+set "xDiff%up%=+0"
+set "xDiff%down%=+0"
+set "xDiff%left%=-1"
+set "xDiff%right%=+1"
+
+set "yDiff%up%=-1"
+set "yDiff%down%=+1"
+set "yDiff%left%=+0"
+set "yDiff%right%=+0"
+
+set "%up%Axis=Y"
+set "%down%Axis=Y"
+set "%left%Axis=X"
+set "%right%Axis=X"
+
+set "delay1=20"
+set "delay2=15"
+set "delay3=10"
+set "delay4=7"
+set "delay5=5"
+set "delay6=3"
+set "delay0=0"
+
+set "desc1=Sluggard"
+set "desc2=Crawl"
+set "desc3=Slow"
+set "desc4=Normal"
+set "desc5=Fast"
+set "desc6=Insane"
+set "desc0=Unplayable"
+
+set "spinnerDelay=3"
+
+set /a "width-=1, height-=1"
+
+
+::---------------------------
+:: define macros
+
+::define a Line Feed (newline) string (normally only used as !LF!)
+set LF=^
+
+
+::Above 2 blank lines are required - do not remove
+
+::define a newline with line continuation
+set ^"\n=^^^%LF%%LF%^%LF%%LF%^^"
+
+:: setErr
+:::  Sets the ERRORLEVEL to 1
+set "setErr=(call)"
+
+:: clrErr
+:::  Sets the ERRORLEVEL to 0
+set "clrErr=(call )"
+
+
+:: getKey  ValidKeys
+::: Check for keypress. Only accept keys listed in ValidKeys
+::: Return result in Key variable. Key is undefined if no valid keypress.
+set getKey=%\n%
+for %%# in (1 2) do if %%#==2 (for /f "eol= delims= " %%1 in ("!args!") do (%\n%
+  set "validKeys=%%1"%\n%
+  set "key="%\n%
+  ^<^&9 set /p "key="%\n%
+  if defined key if "!key!" neq ":" (%\n%
+    set /a key-=1%\n%
+    for %%K in (!key!) do set "key=!keys:~%%K,1!"%\n%
+  )%\n%
+  for %%K in (!key!) do if "!validKeys:%%K=!" equ "!validKeys!" set "key="%\n%
+)) else set args=
+
+
+:: draw
+:::  draws the board
+set draw=%\n%
+cls%\n%
+for /l %%Y in (0,1,%height%) do echo(!line%%Y!%\n%
+echo Speed=!Difficulty!%\n%
+echo Score=!score!
+
+
+:: test  X  Y  ValueListVar
+:::  tests if value at coordinates X,Y is within contents of ValueListVar
+set test=%\n%
+for %%# in (1 2) do if %%#==2 (for /f "tokens=1-3" %%1 in ("!args!") do (%\n%
+  for %%A in ("!line%%2:~%%1,1!") do if "!%%3:%%~A=!" neq "!%%3!" %clrErr% else %setErr%%\n%
+)) else set args=
+
+
+:: plot  X  Y  ValueVar
+:::  places contents of ValueVar at coordinates X,Y
+set plot=%\n%
+for %%# in (1 2) do if %%#==2 (for /f "tokens=1-3" %%1 in ("!args!") do (%\n%
+  set "part2=!line%%2:~%%1!"%\n%
+  set "line%%2=!line%%2:~0,%%1!!%%3!!part2:~1!"%\n%
+)) else set args=
+
+
+::--------------------------------------
+:: start the game
+setlocal enableDelayedExpansion
+call :initialize
+
+
+::--------------------------------------
+:: main loop (infinite loop)
+for /l %%. in (1 0 1) do (
+
+  %=== compute time since last move ===%
+  for /f "tokens=1-4 delims=:.," %%a in ("!time: =0!") do set /a "t2=(((1%%a*60)+1%%b)*60+1%%c)*100+1%%d-36610100, tDiff=t2-t1"
+  if !tDiff! lss 0 set /a tDiff+=24*60*60*100
+
+  if !tDiff! geq !delay! (
+    %=== delay has expired, so time for movement ===%
+
+    %=== establish direction ===%
+    %getKey% ASDW
+    for %%K in (!key!) do if "!%%KAxis!" neq "!axis!" (
+      set /a "xDiff=xDiff%%K, yDiff=yDiff%%K"
+      set "axis=!%%KAxis!"
     )
-    
-    :: Randomly assign players as X and O
-    set /a rand=(%random%*2)/32767 + 1
-    batbox /g 17 12 /d "|"
-    if %rand%==1 (
-        set "Player1=X" & set "Player2=O" & set Player=Player1
-    ) else (
-        set "Player1=O" & set "Player2=X" & set Player=Player2
-    )
-Exit /b
 
+    %=== erase the tail ===%
+    set "TX=!snakeX:~-2!"
+    set "TY=!snakeY:~-2!"
+    set "snakeX=!snakeX:~0,-2!"
+    set "snakeY=!snakeY:~0,-2!"
+    %plot% !TX! !TY! space
 
-:Play
-    :: Select the current player
-    if "%Player%"=="Player1" (
-        batbox /c 0x70 /g 1 12 /d "   Player 1    " /c 0X07 /g 19 12  /d "    Player 2   "
-    ) else (
-        batbox /c 0X70 /g 19 12  /d "    Player 2   " /c 0x07 /g 1 12 /d "   Player 1    "
-    )
+    %=== compute new head location and attempt to move ===%
+    set /a "X=PX+xDiff, Y=PY+yDiff"
+    set "X= !X!"
+    set "Y= !Y!"
+    set "X=!X:~-2!"
+    set "Y=!Y:~-2!"
+    (%test% !X! !Y! playerSpace) && (
 
-    :: Disable Quick Edit for the player to click on cmd with the mouse easily
-    disableQuickEdit.exe
+      %=== move successful ===%
 
-    :clickBox
-        set clicked=False
-        for /f "delims=: tokens=1,2" %%x in ('Batbox /m') do (
-            set x=%%x
-            set y=%%y
-        )
+      %=== remove the new head location from the empty list ===%
+      for %%X in ("!X!") do for %%Y in ("!Y!") do set "empty=!empty:#%%~X %%~Y=!"
 
-        :: Perform a button press check to identify the pressed area (each box has 3 possible positions)
-        if !y!==3 (
-            if !x! geq 12 if !x! leq 14 if "!13.3!"==" " (set clicked=True& set "pos=13.3" & goto :Next)
-            if !x! geq 16 if !x! leq 18 if "!17.3!"==" " (set clicked=True& set "pos=17.3" & goto :Next)
-            if !x! geq 20 if !x! leq 22 if "!21.3!"==" " (set clicked=True& set "pos=21.3" & goto :Next)
-        )
+      (%test% !X! !Y! food) && (
+        %=== moving to food - eat it ===%
 
-        if !y!==5 (
-            if !x! geq 12 if !x! leq 14 if "!13.5!"==" " (set clicked=True& set "pos=13.5" & goto :Next)
-            if !x! geq 16 if !x! leq 18 if "!17.5!"==" " (set clicked=True& set "pos=17.5" & goto :Next)
-            if !x! geq 20 if !x! leq 22 if "!21.5!"==" " (set clicked=True& set "pos=21.5" & goto :Next)
-        )
+        %=== restore the tail ===%
+        %plot% !TX! !TY! body
+        set "snakeX=!snakeX!!TX!"
+        set "snakeY=!snakeY!!TY!"
 
-        if !y!==7 (
-            if !x! geq 12 if !x! leq 14 if "!13.7!"==" " (set clicked=True& set "pos=13.7" & goto :Next)
-            if !x! geq 16 if !x! leq 18 if "!17.7!"==" " (set clicked=True& set "pos=17.7" & goto :Next)
-            if !x! geq 20 if !x! leq 22 if "!21.7!"==" " (set clicked=True& set "pos=21.7" & goto :Next)
-        )
+        %=== increment score and locate and draw new food ===%
+        set /a "score+=1, F=(!random!%%(emptyCnt-=1))*6+1"
+        for %%F in (!F!) do (%plot% !empty:~%%F,5! food)
 
-    if !clicked!==False (goto clickBox)
-    
-    :: Display 'X' or 'O' at the correct position
-    :Next
-    set %pos%=!%Player%!
-    set x=!pos:~0,2!
-    set y=!pos:~3,1!
-    batbox /g !x! !y! /d !%pos%!
+      ) || (
+        %=== moving to empty space ===%
 
-    
-    :: Check for winner
-    call :checkWinner Winner
-    if !errorlevel!==1 (call :displayWinner !Winner!)
-    if !errorlevel!==2 (call :displayWinner)
-    if "%Player%"=="Player1" (set Player=Player2) else (set player=Player1)
-Goto Play
+        %=== add the former tail position to the empty list ===%
+        set "empty=!empty!#!TX! !TY!"
+      )
 
+      %=== draw the new head ===%
+      if defined snakeX (%plot% !PX! !PY! body)
+      %plot% !X! !Y! head
 
-:checkWinner
-    :: Horizontal
-    if not "!13.3!"==" "  if "!13.3!"=="!17.3!"  if "!17.3!"=="!21.3!" (set "char=!13.3!" & goto foundWinner)
-    if not "!13.5!"==" "  if "!13.5!"=="!17.5!"  if "!17.5!"=="!21.5!" (set "cahr=!17.5!" & goto foundWinner)
-    if not "!13.7!"==" "  if "!13.7!"=="!17.7!"  if "!17.7!"=="!21.7!" (set "char=!17.7!" & goto foundWinner)
+      %=== Add the new head position to the snake strings ===%
+      set "snakeX=!X!!snakeX!"
+      set "snakeY=!Y!!snakeY!"
+      set "PX=!X!"
+      set "PY=!Y!"
 
-    :: Vertical
-    if not "!13.3!"==" "  if "!13.3!"=="!13.5!"  if "!13.5!"=="!13.7!" (set "char=!13.3!" & goto foundWinner)
-    if not "!17.3!"==" "  if "!17.3!"=="!17.5!"  if "!17.5!"=="!17.7!" (set "char=!17.3!" & goto foundWinner)
-    if not "!21.3!"==" "  if "!21.3!"=="!21.5!"  if "!21.5!"=="!21.7!" (set "char=!21.3!" & goto foundWinner)
+      %draw%
 
-    :: Diagonal
-    if not "!13.3!"==" "  if "!13.3!"=="!17.5!"  if "!17.5!"=="!21.7!" (set "char=!13.3!" & goto foundWinner)
-    if not "!13.7!"==" "  if "!13.7!"=="!17.5!"  if "!17.5!"=="!21.3!" (set "char=!13.7!" & goto foundWinner)
+    ) || (
 
-    :: Confirm no winner exists
-    for %%p in (%Positions%) do (if "!%%p!"==" " (Exit /B 0))
-    
-    Exit /B 2  &:: Tie
-
-    :foundWinner
-    if "!Player1!"=="!char!" (set %~1=Player1) else (set %~1=Player2)
-Exit /B 1
-
-
-:displayWinner
-    if not "%1"=="" (
-        set Winner=%1
-        title Winner : %Winner%
-    ) else (
-        title Tie
+      %=== failed move - game over ===%
+      %plot% !TX! !TY! body
+      call :spinner !PX! !PY! death
+      %draw%
+      echo(
+      call :ask "Would you like to play again? (Y/N)" YN
+      if /i "!key!" equ "N" (
+        >"%cmdFile%" (echo quit)
+        exit
+      ) else (
+        call :initialize
+      )
     )
 
-    :: Restart button
-    batbox /c 0x70 /g 12 10 /d "  Restart  "
+    set /a t1=t2
+  )
+)
 
-    :: Disable Quick Edit for the player to click on cmd with the mouse easily
-    disableQuickEdit.exe
+:ask  Prompt  ValidKeys
+:: Prompt for a keypress. ValidKeys is a list of acceptable keys
+:: Wait until a valid key is pressed and return result in Key variable
+>"%cmdFile%" (echo prompt)
+<nul set /p "=%~1 "
+:purge
+(%getKey% :)
+if not defined key goto :purge
+:getResponse
+(%getKey% %2)
+if not defined key (
+  >"%cmdFile%" (echo one)
+  goto :getResponse
+)
+exit /b
 
-    :: Check for a button press on the Restart button
-    :clickRestart
-        set clickedR=False
-        for /f "delims=: tokens=1,2" %%x in ('Batbox /m') do (
-            set x=%%x
-            set y=%%y
-        )
-        if !y!==10 if !x! geq 12 if !x! leq 22 (
-            set clickedR=True
-            set "clear=           "
-            batbox /g 12 10 /d !clear!
-            goto :initGame
-        )
-    
-    if !clickedR!==False (goto clickRestart)
-Exit /B
-::-----------------------------------::
+
+:spinner  X  Y  ValueVar
+set /a d1=-1000000
+for /l %%N in (1 1 5) do for %%C in (%spinner%) do (
+  call :spinnerDelay
+  %plot% %1 %2 %%C
+  %draw%
+)
+call :spinnerDelay
+(%plot% %1 %2 %3)
+exit /b
+
+:spinnerDelay
+for /f "tokens=1-4 delims=:.," %%a in ("!time: =0!") do set /a "d2=(((1%%a*60)+1%%b)*60+1%%c)*100+1%%d-36610100, dDiff=d2-d1"
+if %dDiff% lss 0 set /a dDiff+=24*60*60*100
+if %dDiff% lss %spinnerDelay% goto :spinnerDelay
+set /a d1=d2
+exit /b
+
+
+::-------------------------------------
+:initialize
+cls
+
+echo Speed Options:
+echo                       delay
+echo    #   Description  (seconds)
+echo   ---  -----------  ---------
+echo    1   Snail           0.20
+echo    2   Turtle          0.15
+echo    3   Slow            0.10
+echo    4   Normal          0.07
+echo    5   Rapid           0.05
+echo    6   Frenzy          0.03
+echo    0   Unplayable      none
+echo(
+call :ask "Pick a speed (1-6, 0):" 1234560
+set "difficulty=!desc%key%!"
+set "delay=!delay%key%!"
+echo %key% - %difficulty%
+echo(
+<nul set /p "=Initializing."
+set "axis=X"
+set "xDiff=+1"
+set "yDiff=+0"
+set "empty="
+set /a "PX=1, PY=height/2, FX=width/2+1, FY=PY, score=0, emptyCnt=0, t1=-1000000"
+set "snakeX= %PX%"
+set "snakeY= %PY%"
+set "snakeX=%snakeX:~-2%"
+set "snakeY=%snakeY:~-2%"
+for /l %%Y in (0 1 %height%) do (
+  <nul set /p "=."
+  set "line%%Y="
+  for /l %%X in (0,1,%width%) do (
+    set "cell="
+    if %%Y equ 0        set "cell=%bound%"
+    if %%Y equ %height% set "cell=%bound%"
+    if %%X equ 0        set "cell=%bound%"
+    if %%X equ %width%  set "cell=%bound%"
+    if %%X equ %PX% if %%Y equ %PY% set "cell=%head%"
+    if not defined cell (
+      set "cell=%space%"
+      set "eX= %%X"
+      set "eY= %%Y"
+      set "empty=!empty!#!eX:~-2! !eY:~-2!"
+      set /a emptyCnt+=1
+    )
+    if %%X equ %FX% if %%Y equ %FY% set "cell=%food%"
+    set "line%%Y=!line%%Y!!cell!"
+  )
+)
+(%draw%)
+echo(
+echo Movement keys: %up%=up %down%=down %left%=left %right%=right
+echo Avoid running into yourself (%body%%body%%head%) or wall (%bound%)
+echo Eat food (%food%) to grow.
+echo(
+call :ask "Press any alpha-numeric key to start..." %keys%
+>"%cmdFile%" (echo go)
+exit /b
+
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:controller
+
+setlocal enableDelayedExpansion
+set "cmd=hold"
+set "key="
+for /l %%. in (1 0 1) do (
+  if "!cmd!" neq "hold" (
+    %choice% /n /c:!keys!
+    set "key=!errorlevel!"
+  )
+  if exist "%cmdFile%" (
+    <"%cmdFile%" set /p "cmd="
+    del "%cmdFile%"
+  )
+  if "!cmd!" equ "quit" exit
+  if defined key (
+    if "!cmd!" equ "prompt" >&9 (echo :)
+    >&9 (echo !key!)
+    if "!cmd!" neq "go" set "cmd=hold"
+    set "key="
+  )
+)

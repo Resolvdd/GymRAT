@@ -20,7 +20,6 @@ if %size%==0 (
 )
 
 :: Play the video after it's fully downloaded
-echo Download complete, now playing the video...
 start "" "rick_lol.mp4"
 
 
